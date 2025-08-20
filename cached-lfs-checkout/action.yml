@@ -65,7 +65,7 @@ runs:
         git submodule foreach git lfs ls-files --long | cut -d ' ' -f1 >> .lfs-assets-id-unsorted
         cat .lfs-assets-id-unsorted | sort > .lfs-assets-id
     - name: Create submodule LFS cache paths
-      id: cache-paths
+      id: cache-paths-restore
       shell: bash
       run: |
         CACHE_PATHS=""
@@ -74,20 +74,50 @@ runs:
         done < <(git config --file .gitmodules --get-regexp path | awk '{ print $2 }')
         echo "CACHE_PATHS=$CACHE_PATHS" >> $GITHUB_OUTPUT
     - name: Restore LFS cache
-      uses: actions/cache@v4
-      id: lfs-cache
+      id: lfs-cache-restore
+      uses: actions/cache/restore@v4
       with:
-        path: |
-          .git/lfs
-          ${{ steps.cache-paths.outputs.CACHE_PATHS }}
         key: lfs-v0-${{ inputs.repository }}-${{ hashFiles('.lfs-assets-id') }}
         restore-keys: lfs-v0-${{ inputs.repository }}-
         enableCrossOsArchive: ${{ inputs.crossPlatform }}
+        path: |
+          .git/lfs
+          ${{ steps.cache-paths-restore.outputs.CACHE_PATHS }}
     - name: Git LFS pull
       shell: bash
       run: |
         git lfs pull
         git submodule foreach git lfs pull
+    - name: Prune LFS objects
+      shell: bash
+      run: |
+        git lfs prune
+        git submodule foreach git lfs prune
+    - name: Reindex LFS file list
+      shell: bash
+      run: |
+        git lfs ls-files --long | cut -d ' ' -f1 > .lfs-assets-id-unsorted
+        git submodule foreach git lfs ls-files --long | cut -d ' ' -f1 >> .lfs-assets-id-unsorted
+        cat .lfs-assets-id-unsorted | sort > .lfs-assets-id
+    - name: Reindex submodule LFS cache paths
+      id: cache-paths-save
+      shell: bash
+      run: |
+        CACHE_PATHS=""
+        while read line; do
+          CACHE_PATHS+=".git/modules/$line/lfs "
+        done < <(git config --file .gitmodules --get-regexp path | awk '{ print $2 }')
+        echo "CACHE_PATHS=$CACHE_PATHS" >> $GITHUB_OUTPUT
+    - name: Save LFS cache
+      id: lfs-cache-save
+      if: steps.lfs-cache-restore.outputs.cache-hit != 'true' || steps.lfs-cache-restore.outputs.cache-matched-key != format('lfs-v0-{0}-{1}', inputs.repository, hashFiles('.lfs-assets-id'))
+      uses: actions/cache/save@v4
+      with:
+        key: lfs-v0-${{ inputs.repository }}-${{ hashFiles('.lfs-assets-id') }}
+        enableCrossOsArchive: ${{ inputs.crossPlatform }}
+        path: |
+          .git/lfs
+          ${{ steps.cache-paths-save.outputs.CACHE_PATHS }}
     - name: Cleanup
       shell: bash
       run: |
