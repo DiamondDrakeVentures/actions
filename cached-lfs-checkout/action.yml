@@ -1,0 +1,95 @@
+name: Checkout with LFS (Cached)
+description: Checkout repository content and LFS content utilizing cache
+
+inputs:
+  repository:
+    description: >
+      Repository name with owner.
+      For example, actions/checkout.
+    required: false
+    default: ${{ github.repository }}
+  ref:
+    description: >
+      The branch, tag, or SHA to checkout.
+      When checking out the repository that triggered a workflow, this defaults to the reference or
+      SHA for that event.
+      Otherwise, uses the default branch.
+    required: false
+    default: ""
+  token:
+    description: >
+      Personal Access Token (PAT) used to fetch the repository.
+      The PAT is configured with the local git config, which enables your scripts to run
+      authenticated git commands.
+      The post-job step removes the PAT.
+
+      We recommend using a service account with the least permissions necessary.
+      Also when generating a new PAT, select the least scopes necessary.
+    required: false
+    default: ${{ github.token }}
+
+  fetch-depth:
+    description: >
+      Number of commits to fetch.
+      0 indicates all history for all tags and branches.
+    required: false
+    default: '1'
+  submodules:
+    description: >
+      Whether to checkout submodules: `true` to checkout submodules or `recursive` to recursively
+      checkout submodules.
+    required: false
+    default: 'false'
+  crossPlatform:
+    description: >
+      Whether the cache is cross-platform.
+      This is useful to cache dependencies which are runner platform independent.
+    required: false
+    default: 'false'
+
+runs:
+  using: "composite"
+  steps:
+    - name: Checkout code
+      uses: actions/checkout@v5
+      with:
+        token: ${{ inputs.token }}
+        repository: ${{ inputs.repository }}
+        ref: ${{ inputs.ref }}
+        fetch-depth: ${{ inputs.fetch-depth }}
+        submodules: ${{ inputs.submodules }}
+    - name: Create LFS file list
+      shell: bash
+      run: |
+        git lfs ls-files --long | cut -d ' ' -f1 > .lfs-assets-id-unsorted
+        git submodule foreach git lfs ls-files --long | cut -d ' ' -f1 >> .lfs-assets-id-unsorted
+        cat .lfs-assets-id-unsorted | sort > .lfs-assets-id
+    - name: Create submodule LFS cache paths
+      id: cache-paths
+      shell: bash
+      run: |
+        CACHE_PATHS=""
+        while read line; do
+          CACHE_PATHS+=".git/modules/$line/lfs "
+        done < <(git config --file .gitmodules --get-regexp path | awk '{ print $2 }')
+        echo "CACHE_PATHS=$CACHE_PATHS" >> $GITHUB_OUTPUT
+    - name: Restore LFS cache
+      uses: actions/cache@v4
+      id: lfs-cache
+      with:
+        path: |
+          .git/lfs
+          ${{ steps.cache-paths.outputs.CACHE_PATHS }}
+        key: lfs-v0-${{ inputs.repository }}-${{ hashFiles('.lfs-assets-id') }}
+        restore-keys: lfs-v0-${{ inputs.repository }}-
+        enableCrossOsArchive: ${{ inputs.crossPlatform }}
+    - name: Git LFS pull
+      shell: bash
+      run: |
+        git lfs pull
+        git submodule foreach git lfs pull
+    - name: Cleanup
+      shell: bash
+      run: |
+        rm .lfs-assets-id-unsorted
+        rm .lfs-assets-id
